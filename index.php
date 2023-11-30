@@ -1,11 +1,11 @@
 <?php
 session_start();
+
 // Verbindung zur Datenbank herstellen
 $servername = "45.83.245.57";
-$username = "vsc_users";
+$username = "vsc_forum_";
 $password = "***********";
-$dbname = "userdb";
-
+$dbname = "forum_";
 $conn = new mysqli($servername, $username, $password, $dbname);
 
 // Überprüfen, ob die Verbindung erfolgreich war
@@ -13,100 +13,186 @@ if ($conn->connect_error) {
     die("Verbindung fehlgeschlagen: " . $conn->connect_error);
 }
 
-// Initialisiere Meldungsvariablen
-$erfolgsmeldung = "";
-$fehlermeldung = "";
+// Überprüfen, ob der Benutzer angemeldet ist
+$benutzername = isset($_SESSION["benutzername"]) ? $_SESSION["benutzername"] : null;
 
-// Überprüfen, ob das Formular abgeschickt wurde
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // Die eingegebenen Daten aus dem Formular abrufen
-    $eingegebener_benutzername = isset($_POST["benutzername"]) ? $_POST["benutzername"] : null;
-    $eingegebener_code = isset($_POST["code"]) ? $_POST["code"] : null;
+// Funktion zum Formatieren des Texts
+function formatiereText($text) {
+    // Fett: [b]Text[/b]
+    $text = preg_replace("/\[b\](.*?)\[\/b\]/", "<span class='bold-text'>$1</span>", $text);
 
-    // Überprüfen, ob der eingegebene Benutzername und Code korrekt sind
-    $sql = "SELECT * FROM users WHERE username = '$eingegebener_benutzername' AND password = '$eingegebener_code'";
-    $result = $conn->query($sql);
+    // Kursiv: [i]Text[/i]
+    $text = preg_replace("/\[i\](.*?)\[\/i\]/", "<em>$1</em>", $text);
 
-    if ($result) {
-        if ($result->num_rows > 0) {
-            // Benutzer gefunden, überprüfe die Blockierung
-            $row = $result->fetch_assoc();
+    // Code: [code]Text[/code]
+    $text = preg_replace("/\[code\](.*?)\[\/code\]/", "<code>$1</code>", $text);
 
-            if ($row['Blocked'] == 'yes') {
-                // Benutzer ist blockiert
-                $fehlermeldung = "Zugriff verweigert! Ihr Konto wurde gesperrt";
-            } elseif ($row['Stellung'] == 'Admin') {
-                // Benutzer hat die Stellung 'Admin', weiterleiten zur Admin-Seite
-                $_SESSION["benutzername"] = $eingegebener_benutzername;
-                $erfolgsmeldung = "Zugriff gewährt! :: Umleitung auf dashboard.php";
-                // JavaScript zum Umleiten nach 5 Sekunden einfügen
-                echo '<script>
-                        setTimeout(function() {
-                            window.location.href = "./dashboard.php";
-                        }, 2500);
-                      </script>';
-            } else {
-                // Benutzer hat eine andere Stellung, weiterleiten zur anderen Seite
-                $erfolgsmeldung = "Zugriff gewährt! :: Umleitung auf userpanel.php";
-                echo '<script>
-                        setTimeout(function() {
-                            window.location.href = "./userpanel.php";
-                        }, 2500);
-                      </script>';
-            }
+    // Farbe: [color=#RRGGBB]Text[/color]
+    $text = preg_replace("/\[color=([#a-fA-F0-9]{6})\](.*?)\[\/color\]/", "<span style='color: #$1;'>$2</span>", $text);
+
+    return $text;
+}
+
+// Löschen eines Beitrags, wenn der Benutzer angemeldet ist
+if (isset($_POST["delete_post"]) && $benutzername) {
+    $postID = isset($_POST["post_id"]) ? $_POST["post_id"] : null;
+
+    if ($postID) {
+        // Beitrag aus der Datenbank löschen
+        $deleteSql = "DELETE FROM posts WHERE id='$postID' AND username='$benutzername'";
+        $deleteResult = $conn->query($deleteSql);
+
+        if ($deleteResult) {
+            // Beitrag erfolgreich gelöscht
+            $erfolgsmeldung = "Beitrag erfolgreich gelöscht!";
         } else {
-            // Benutzer nicht gefunden, hier kannst du eine Fehlermeldung oder Weiterleitung einfügen
-            $fehlermeldung = "Zugriff verweigert!";
+            // Fehler beim Löschen des Beitrags
+            $fehlermeldung = "Fehler beim Löschen des Beitrags.";
         }
-    } else {
-        // Fehler bei der SQL-Abfrage, hier kannst du eine Fehlermeldung oder Weiterleitung einfügen
-        $fehlermeldung = "Fehler bei der Anmeldung.";
     }
 }
 
-// Datenbankverbindung schließen
-$conn->close();
+// Beitrag hinzufügen, wenn der Benutzer angemeldet ist
+if ($_SERVER["REQUEST_METHOD"] == "POST" && $benutzername) {
+    $postText = isset($_POST["post_text"]) ? $_POST["post_text"] : null;
+
+    if ($postText) {
+        // Text formatieren
+        $postText = formatiereText($postText);
+
+        // Überprüfen, ob die Nachricht bereits existiert
+        $checkSql = "SELECT * FROM posts WHERE message='$postText'";
+        $checkResult = $conn->query($checkSql);
+
+        if ($checkResult->num_rows == 0) {
+            // Beitrag in die Datenbank einfügen
+            $insertSql = "INSERT INTO posts (username, message, date) VALUES ('$benutzername', '$postText', NOW())";
+            $result = $conn->query($insertSql);
+
+            if ($result) {
+                // Beitrag erfolgreich in die Datenbank eingefügt
+                $erfolgsmeldung = "Beitrag erfolgreich veröffentlicht!";
+            } else {
+                // Fehler beim Einfügen
+                $fehlermeldung = "Fehler beim Veröffentlichen des Beitrags.";
+            }
+        } else {
+            // Nachricht bereits vorhanden
+            $fehlermeldung = "Nachricht bereits vorhanden.";
+        }
+    }
+}
+
+// Beispiel: Anzeige der neuesten Beiträge aus der Datenbank
+function displayPosts($conn, $benutzername) {
+    echo "<h2>Forum-Beiträge</h2>";
+
+    // Beiträge aus der Datenbank abrufen
+    $selectSql = "SELECT * FROM posts ORDER BY date DESC";
+    $result = $conn->query($selectSql);
+
+    if ($result->num_rows > 0) {
+        while ($row = $result->fetch_assoc()) {
+            echo "<div class='post'>";
+            echo "<p><strong>{$row['username']}</strong> - {$row['date']}</p>";
+            echo "<p>" . formatiereText($row['message']) . "</p>";
+
+            // Löschen-Button nur für den Verfasser anzeigen
+            if ($benutzername && $benutzername === $row['username']) {
+                echo "<form method='post' action='" . htmlspecialchars($_SERVER["PHP_SELF"]) . "' class='delete-form'>";
+                echo "<input type='hidden' name='post_id' value='{$row['id']}'>";
+                echo "<button type='submit' name='delete_post' style='background-color: #ED413E;'>Löschen</button>";
+                echo "</form>";
+            }
+
+            echo "</div>";
+        }
+    } else {
+        echo "<div style='text-align: center;'>";
+        echo "<p>Es gibt noch keine Beiträge.</p>";
+        echo "</div>";
+    }
+}
+
+// Beispiel: Abmelden
+if (isset($_GET["logout"])) {
+    session_unset();
+    session_destroy();
+    header("Location: index.php");
+    exit();
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="de">
 <head>
+    <link rel="icon" href="https://img.icons8.com/?size=48&id=pj6wp6z7skPd&format=png" type="image/x-icon">
     <meta charset="UTF-8">
-    <link rel="icon" rel="image/x-icon" href="https://cdn-icons-png.flaticon.com/128/4618/4618413.png">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Code</title>
-    <link rel="stylesheet" href="index.css">
+    <title>Forum</title>
+    <link rel="stylesheet" href="./style_files/forum-style.css">
+    <style>
+        .bold-text {
+            font-weight: bold;
+        }
+
+        .delete-form {
+            display: inline-block;
+            margin-left: 10px;
+        }
+    </style>
+    <div class="breadcrumb">
+        <a href="/">Startseite</a>
+        <span> ▹ </span>
+        <span>Forum</span>
+    </div>
 </head>
 <body>
-    <!-- Anzeigen der Meldungen als <h2>, wenn vorhanden -->
-    <?php
-    if ($erfolgsmeldung !== "") {
-        echo "<h2 class='erfolgsmeldung'>$erfolgsmeldung</h2>";
-    } elseif ($fehlermeldung !== "") {
-        echo "<h2 class='fehlermeldung'>$fehlermeldung</h2>";
-    }
-    ?>
-    <br>
-    <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
-        <label for="benutzername">Benutzername:</label>
-        <input type="text" id="benutzername" name="benutzername" required>
+    <?php if ($benutzername) : ?>
+        <p>Eingeloggt als: <strong><?= $benutzername ?></strong></p>
+        <a href="?logout">Abmelden</a>
+    <?php else : ?>
+        <p>Nicht eingeloggt. <a href="./login.php">Anmelden</a></p>
+        <a href="./rss.php" target="_blank">RSS</a>
+    <?php endif; ?>
 
-        <label for="code">Passwort:</label>
-        <input type="password" id="code" name="code" required>
+    <form action="<?= htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" class="post-form">
+        <label for="post_text">Neuer Beitrag:</label>
+        <textarea id="post_text" name="post_text" <?php if (!$benutzername) echo "disabled"; ?> required></textarea>
+        
+        <!-- Buttons für Textdekoration -->
+        <div class="format-buttons">
+            <button type="button" onclick="insertTag('b')" style="background-color: #36363f; border-radius: 100px;">Fett</button>
+            <button type="button" onclick="insertTag('i')" style="background-color: black; border-radius: 100px;">Kursiv</button>
+            <button type="button" onclick="insertTag('code')" style="background-color: black; border-radius: 100px;">Code</button>
+            <input type="color" id="colorPicker" onchange="insertColor()" title="Farbauswahl">
+        </div>
+        <br>
+        <button type="submit" <?php if (!$benutzername) echo "disabled"; ?>>Veröffentlichen</button>
+        <script>
+            function insertTag(tag) {
+                var textarea = document.getElementById('post_text');
+                var start = textarea.selectionStart;
+                var end = textarea.selectionEnd;
+                var selectedText = textarea.value.substring(start, end);
+                var replacement = '[' + tag + ']' + selectedText + '[/' + tag + ']';
+                textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+            }
 
-        <button type="submit">Überprüfen</button>
-        <br>
-        <br>
-        <button onclick="window.location.href = 'http://vertex.deinweb.space';" style="background-color: #BBC6C8;">Abbrechen</button>
-		<br>
-		<br>
-		<button onclick="redirectToSupport()" style="background-color: #DED3A6;">Passwort vergessen?</button>
+            function insertColor() {
+                var colorPicker = document.getElementById('colorPicker');
+                var selectedColor = colorPicker.value;
+                var textarea = document.getElementById('post_text');
+                var start = textarea.selectionStart;
+                var end = textarea.selectionEnd;
+                var selectedText = textarea.value.substring(start, end);
+                var replacement = '[color=' + selectedColor + ']' + selectedText + '[/color]';
+                textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+            }
+        </script>
     </form>
-	<script>
-	function redirectToSupport(){
-			alert("Du wirst zum Support weitergeleitet");
-			window.location.href = "https://vertexcloud.de/users/support.php";
-		}
-	</script>
+
+    <?php displayPosts($conn, $benutzername); ?>
+
 </body>
 </html>
